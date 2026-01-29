@@ -26,7 +26,7 @@ Create a migration for user subscriptions to track which people a user wants not
 ```
 
 ### 1.2 Create Notification Preferences Table
-User-level notification settings.
+User-level notification and display settings.
 
 ```sql
 -- Table: notification_preference
@@ -35,9 +35,12 @@ User-level notification settings.
 - weekly_digest_enabled (BOOLEAN, DEFAULT TRUE)
 - daily_reminder_enabled (BOOLEAN, DEFAULT TRUE)
 - email_notifications (BOOLEAN, DEFAULT TRUE)
-- advance_notice_days (INTEGER, DEFAULT 7) -- how many days ahead to show events
+- advance_notice_days (INTEGER, DEFAULT 7) -- how many days ahead for notifications
+- default_events_period (TEXT, DEFAULT 'this_week') -- default period for events page
 - created_at (TIMESTAMP WITH TIME ZONE, DEFAULT NOW())
 - updated_at (TIMESTAMP WITH TIME ZONE, DEFAULT NOW())
+
+-- Note: Weeks start on Sunday
 ```
 
 ### 1.3 Create Custom Events Table
@@ -84,7 +87,7 @@ npm install @hebcal/core
 ### 2.2 Create Calendar Utility Module
 Location: `lib/calendar/hebrew-calendar.ts`
 
-Functions needed:
+**Hebrew Date Functions:**
 - `getHebrewDate(gregorianDate: Date, afterSunset: boolean)` - Convert Gregorian to Hebrew
 - `getUpcomingHebrewAnniversary(hebrewDate, referenceDate)` - Get next occurrence of Hebrew date
 - `getUpcomingGregorianAnniversary(gregorianDate, referenceDate)` - Get next birthday/anniversary
@@ -92,6 +95,44 @@ Functions needed:
 - `getUpcomingEventDate(eventDate, afterSunset, referenceDate)` - Generic function for any recurring event
 - `isDateInRange(date, startDate, endDate)` - Check if date falls within range
 - `calculateYearsSince(originalDate, currentDate)` - Calculate years for display (age, years married, etc.)
+
+### 2.3 Create Period Utility Module
+Location: `lib/calendar/period-utils.ts`
+
+**Period Resolution Functions:**
+- `getPeriodDateRange(period: string, today: Date)` - Convert period name to date range
+- `getWeekRange(date: Date)` - Get Sunday-Saturday range for given date
+- `getHebrewMonthRange(date: Date)` - Get Hebrew month start/end dates
+
+```typescript
+type Period = 'this_week' | 'next_week' | 'this_month' | 'next_month'
+            | 'this_hebrew_month' | 'next_hebrew_month' | 'custom';
+
+interface DateRange {
+  start: Date;
+  end: Date;
+  hebrewStart?: string;  // formatted Hebrew date
+  hebrewEnd?: string;
+}
+
+function getPeriodDateRange(period: Period, today: Date): DateRange {
+  switch (period) {
+    case 'this_week':
+      return getWeekRange(today);  // Sunday-Saturday
+    case 'next_week':
+      return getWeekRange(addWeeks(today, 1));
+    case 'this_month':
+      return { start: startOfMonth(today), end: endOfMonth(today) };
+    case 'next_month':
+      const nextMonth = addMonths(today, 1);
+      return { start: startOfMonth(nextMonth), end: endOfMonth(nextMonth) };
+    case 'this_hebrew_month':
+      return getHebrewMonthRange(today);
+    case 'next_hebrew_month':
+      return getHebrewMonthRange(getNextHebrewMonth(today));
+  }
+}
+```
 
 ---
 
@@ -123,16 +164,45 @@ Location: `app/api/events/`
 |--------|----------|-------------|
 | GET | `/api/events/all` | Get ALL upcoming events (global view, regardless of subscriptions) |
 | GET | `/api/events/subscribed` | Get upcoming events only for people user is subscribed to |
-| GET | `/api/events/today` | Get today's events (subscribed) |
-| GET | `/api/events/week` | Get this week's events (subscribed) |
 
-**GET /api/events/all and /api/events/subscribed Query Parameters:**
-- `days` (number, default: 7) - How many days ahead to look
-- `type` (string) - Filter by 'birthday', 'yahrzeit', 'anniversary', etc.
+**Query Parameters (Calendar-Based Periods):**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `period` | string | Time period to query (see below). Default: user's preference or `this_week` |
+| `start_date` | date | Start date for custom period (requires `period=custom`) |
+| `end_date` | date | End date for custom period (requires `period=custom`) |
+| `type` | string | Filter by event type: `birthday`, `yahrzeit`, `anniversary`, etc. |
+
+**Supported Periods:**
+
+| Period | Description |
+|--------|-------------|
+| `this_week` | Current week (Sunday-Saturday) |
+| `next_week` | Following week |
+| `this_month` | Current calendar month |
+| `next_month` | Following calendar month |
+| `this_hebrew_month` | Current Hebrew month |
+| `next_hebrew_month` | Following Hebrew month |
+| `custom` | Custom date range using `start_date` and `end_date` |
+
+**Example Requests:**
+```
+GET /api/events/all?period=this_week
+GET /api/events/subscribed?period=next_month
+GET /api/events/all?period=custom&start_date=2024-01-15&end_date=2024-02-15
+```
 
 **Response Format:**
 ```json
 {
+  "period": "this_month",
+  "date_range": {
+    "start": "2024-01-01",
+    "end": "2024-01-31",
+    "hebrew_start": "20 Tevet 5784",
+    "hebrew_end": "21 Shevat 5784"
+  },
   "events": [
     {
       "person_id": "uuid",
@@ -314,7 +384,8 @@ Allow subscribing to multiple people at once:
 
 ```json
 {
-  "@hebcal/core": "^5.x.x"
+  "@hebcal/core": "^5.x.x",
+  "date-fns": "^3.x.x"
 }
 ```
 
@@ -352,7 +423,8 @@ kasselbook/
 │               └── page.tsx          # Notification settings
 ├── lib/
 │   └── calendar/
-│       └── hebrew-calendar.ts        # Hebrew date utilities
+│       ├── hebrew-calendar.ts        # Hebrew date utilities
+│       └── period-utils.ts           # Calendar period resolution (this_week, etc.)
 ├── components/
 │   ├── events/
 │   │   ├── event-card.tsx

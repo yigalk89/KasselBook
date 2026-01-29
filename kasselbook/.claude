@@ -63,10 +63,14 @@ Store custom recurring events like anniversaries.
 - `gregorian_date`, `date_after_sunset` (for Hebrew date calc)
 
 #### Notification Preference
-User-level notification settings.
+User-level notification and display settings.
 - `user_id` (FK → auth.users, UNIQUE)
 - `weekly_digest_enabled`, `daily_reminder_enabled` (BOOLEAN)
 - `advance_notice_days` (INTEGER)
+- `default_events_period` (TEXT) - default: 'this_week'
+
+**Supported Periods:** `this_week`, `next_week`, `this_month`, `next_month`, `this_hebrew_month`, `next_hebrew_month`, `custom`
+**Note:** Weeks start on Sunday
 
 ## Development Guidelines
 
