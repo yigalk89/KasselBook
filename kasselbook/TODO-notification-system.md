@@ -1,7 +1,7 @@
 # Notification System for Upcoming Events - Implementation Plan
 
 ## Overview
-Build a notification system that alerts users about upcoming events (birthdays and yahrzeits) for people they've subscribed to, supporting both Hebrew and Gregorian calendars.
+Build a notification system that alerts users about upcoming events (birthdays, yahrzeits, anniversaries, etc.) supporting both Hebrew and Gregorian calendars. Includes both a global view of all upcoming events and personalized notifications for subscribed people.
 
 ---
 
@@ -13,15 +13,16 @@ Create a migration for user subscriptions to track which people a user wants not
 ```sql
 -- Table: subscription
 - id (UUID, PK)
-- user_id (UUID, FK → auth.users.id, CASCADE DELETE)
-- person_id (UUID, FK → person.id, CASCADE DELETE)
+- subscriber_user_id (UUID, FK → auth.users.id, CASCADE DELETE)  -- the user receiving notifications
+- subscribed_to_person_id (UUID, FK → person.id, CASCADE DELETE) -- the person whose events trigger notifications
 - notify_birthday (BOOLEAN, DEFAULT TRUE)
 - notify_yahrzeit (BOOLEAN, DEFAULT TRUE)
+- notify_anniversary (BOOLEAN, DEFAULT TRUE)
 - created_at (TIMESTAMP WITH TIME ZONE, DEFAULT NOW())
 
 -- Constraints:
-- UNIQUE(user_id, person_id) - prevent duplicate subscriptions
-- Indexes on user_id and person_id for fast lookups
+- UNIQUE(subscriber_user_id, subscribed_to_person_id) - prevent duplicate subscriptions
+- Indexes on subscriber_user_id and subscribed_to_person_id for fast lookups
 ```
 
 ### 1.2 Create Notification Preferences Table
@@ -39,7 +40,25 @@ User-level notification settings.
 - updated_at (TIMESTAMP WITH TIME ZONE, DEFAULT NOW())
 ```
 
-### 1.3 Create Notification Log Table (Optional)
+### 1.3 Create Custom Events Table
+Store custom events like anniversaries, bar/bat mitzvahs, or other recurring dates.
+
+```sql
+-- Table: custom_event
+- id (UUID, PK)
+- person_id (UUID, FK → person.id, CASCADE DELETE)  -- primary person associated with event
+- related_person_id (UUID, FK → person.id, nullable) -- optional second person (e.g., spouse for anniversary)
+- event_type (TEXT, NOT NULL) -- 'anniversary', 'bar_mitzvah', 'aliyah', 'other'
+- event_name (TEXT) -- custom display name, e.g., "Wedding Anniversary"
+- gregorian_date (DATE, NOT NULL)
+- date_after_sunset (BOOLEAN, DEFAULT FALSE) -- for Hebrew date calculation
+- notes (TEXT)
+- created_at (TIMESTAMP WITH TIME ZONE, DEFAULT NOW())
+
+-- Indexes on person_id and event_type
+```
+
+### 1.4 Create Notification Log Table (Optional)
 Track sent notifications to prevent duplicates.
 
 ```sql
@@ -47,7 +66,7 @@ Track sent notifications to prevent duplicates.
 - id (UUID, PK)
 - user_id (UUID, FK → auth.users.id)
 - person_id (UUID, FK → person.id)
-- event_type (TEXT) -- 'birthday' or 'yahrzeit'
+- event_type (TEXT) -- 'birthday', 'yahrzeit', 'anniversary', etc.
 - event_date (DATE)
 - notification_type (TEXT) -- 'weekly_digest' or 'daily_reminder'
 - sent_at (TIMESTAMP WITH TIME ZONE, DEFAULT NOW())
@@ -68,9 +87,11 @@ Location: `lib/calendar/hebrew-calendar.ts`
 Functions needed:
 - `getHebrewDate(gregorianDate: Date, afterSunset: boolean)` - Convert Gregorian to Hebrew
 - `getUpcomingHebrewAnniversary(hebrewDate, referenceDate)` - Get next occurrence of Hebrew date
-- `getUpcomingGregorianAnniversary(gregorianDate, referenceDate)` - Get next birthday
+- `getUpcomingGregorianAnniversary(gregorianDate, referenceDate)` - Get next birthday/anniversary
 - `getUpcomingYahrzeit(dateOfPassing, afterSunset, referenceDate)` - Calculate yahrzeit
+- `getUpcomingEventDate(eventDate, afterSunset, referenceDate)` - Generic function for any recurring event
 - `isDateInRange(date, startDate, endDate)` - Check if date falls within range
+- `calculateYearsSince(originalDate, currentDate)` - Calculate years for display (age, years married, etc.)
 
 ---
 
@@ -100,13 +121,14 @@ Location: `app/api/events/`
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/events/upcoming` | Get upcoming events for subscribed people |
-| GET | `/api/events/today` | Get today's events |
-| GET | `/api/events/week` | Get this week's events |
+| GET | `/api/events/all` | Get ALL upcoming events (global view, regardless of subscriptions) |
+| GET | `/api/events/subscribed` | Get upcoming events only for people user is subscribed to |
+| GET | `/api/events/today` | Get today's events (subscribed) |
+| GET | `/api/events/week` | Get this week's events (subscribed) |
 
-**GET /api/events/upcoming Query Parameters:**
+**GET /api/events/all and /api/events/subscribed Query Parameters:**
 - `days` (number, default: 7) - How many days ahead to look
-- `type` (string) - Filter by 'birthday' or 'yahrzeit'
+- `type` (string) - Filter by 'birthday', 'yahrzeit', 'anniversary', etc.
 
 **Response Format:**
 ```json
@@ -115,11 +137,13 @@ Location: `app/api/events/`
     {
       "person_id": "uuid",
       "person_name": "string",
-      "event_type": "birthday" | "yahrzeit",
+      "event_type": "birthday" | "yahrzeit" | "anniversary" | "other",
+      "event_name": "string",  // e.g., "Birthday" or "Wedding Anniversary"
       "gregorian_date": "2024-01-15",
       "hebrew_date": "5 Shevat 5784",
       "days_until": 3,
-      "age": 75  // for birthdays, years since for yahrzeit
+      "years": 75,  // age for birthdays, years since for yahrzeit, years married for anniversary
+      "is_subscribed": true  // helpful for global view to show subscription status
     }
   ]
 }
@@ -168,18 +192,25 @@ Using `pg_cron` in Supabase or Supabase Edge Functions with scheduled triggers.
 
 ## Phase 5: Frontend Pages
 
-### 5.1 Upcoming Events Page
+### 5.1 Upcoming Events Pages
 Location: `app/protected/events/page.tsx`
 
+**Two Views:**
+1. **All Events** (`/protected/events/all`) - Shows ALL upcoming events in the database
+2. **My Events** (`/protected/events`) - Shows only events for subscribed people
+
 **Features:**
+- Toggle between "All Events" and "My Events" views
 - Display list of upcoming events (next 7-30 days)
-- Filter by event type (birthday/yahrzeit)
+- Filter by event type (birthday/yahrzeit/anniversary)
 - Toggle between Hebrew/Gregorian date display
 - Sort by date
-- Quick actions (view person, unsubscribe)
+- Quick actions (view person, subscribe/unsubscribe)
+- In "All Events" view, show subscription status with quick subscribe button
 
 **UI Components:**
 - Event card with person info and date
+- View toggle (All / My Events)
 - Date range selector
 - Filter dropdown
 - Empty state when no events
@@ -227,7 +258,7 @@ Allow subscribing to multiple people at once:
 ## Implementation Order (Recommended)
 
 ### Sprint 1: Foundation
-- [ ] Create database migrations (subscription, notification_preference tables)
+- [ ] Create database migrations (subscription, notification_preference, custom_event tables)
 - [ ] Install and configure @hebcal/core
 - [ ] Create Hebrew calendar utility module
 - [ ] Create Supabase TypeScript types
@@ -300,8 +331,10 @@ kasselbook/
 │   │   │   └── [personId]/
 │   │   │       └── route.ts          # DELETE, PATCH subscription
 │   │   ├── events/
-│   │   │   ├── upcoming/
-│   │   │   │   └── route.ts          # GET upcoming events
+│   │   │   ├── all/
+│   │   │   │   └── route.ts          # GET all upcoming events (global)
+│   │   │   ├── subscribed/
+│   │   │   │   └── route.ts          # GET events for subscribed people
 │   │   │   └── today/
 │   │   │       └── route.ts          # GET today's events
 │   │   └── notifications/
@@ -309,7 +342,9 @@ kasselbook/
 │   │           └── route.ts          # GET, PUT preferences
 │   └── protected/
 │       ├── events/
-│       │   └── page.tsx              # Upcoming events page
+│       │   ├── page.tsx              # My subscribed events page
+│       │   └── all/
+│       │       └── page.tsx          # All events page (global view)
 │       ├── subscriptions/
 │       │   └── page.tsx              # Manage subscriptions
 │       └── settings/
@@ -322,13 +357,15 @@ kasselbook/
 │   ├── events/
 │   │   ├── event-card.tsx
 │   │   ├── event-list.tsx
-│   │   └── event-filters.tsx
+│   │   ├── event-filters.tsx
+│   │   └── events-view-toggle.tsx    # Toggle between All/My Events
 │   └── subscriptions/
 │       ├── subscribe-button.tsx
 │       └── subscription-list.tsx
 └── supabase/
     ├── migrations/
     │   ├── YYYYMMDD_add_subscription_table.sql
+    │   ├── YYYYMMDD_add_custom_event_table.sql
     │   ├── YYYYMMDD_add_notification_preference_table.sql
     │   └── YYYYMMDD_add_notification_log_table.sql
     └── functions/
