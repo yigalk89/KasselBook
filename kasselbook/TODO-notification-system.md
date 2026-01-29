@@ -61,7 +61,41 @@ Store custom events like anniversaries, bar/bat mitzvahs, or other recurring dat
 -- Indexes on person_id and event_type
 ```
 
-### 1.4 Create Notification Log Table (Optional)
+### 1.4 Create Upcoming Event Table (Materialized Cache)
+Pre-computed table storing calculated upcoming events. Refreshed daily by cron job.
+
+```sql
+-- Table: upcoming_event
+- id (UUID, PK)
+
+-- Source references
+- person_id (UUID, FK → person.id, CASCADE DELETE, NOT NULL)
+- related_person_id (UUID, FK → person.id, CASCADE DELETE, nullable) -- for anniversaries
+- custom_event_id (UUID, FK → custom_event.id, CASCADE DELETE, nullable) -- if from custom_event
+
+-- Event details
+- event_type (TEXT, NOT NULL) -- 'birthday', 'yahrzeit', 'anniversary', etc.
+- event_name (TEXT, NOT NULL) -- "David's Birthday", "Sarah's Yahrzeit"
+
+-- Calculated dates (for the upcoming occurrence)
+- event_gregorian_date (DATE, NOT NULL) -- when it occurs this year
+- event_hebrew_date (TEXT, NOT NULL)    -- formatted: "15 Shevat 5785"
+
+-- Context
+- original_date (DATE, NOT NULL)        -- original event date (for calculating years)
+- years (INTEGER)                       -- age, years since passing, years married
+
+-- Metadata
+- calculated_at (TIMESTAMP WITH TIME ZONE, DEFAULT NOW())
+
+-- Constraints & Indexes
+- UNIQUE(person_id, event_type, event_gregorian_date) -- prevent duplicates
+- INDEX on event_gregorian_date (primary query filter)
+- INDEX on person_id
+- INDEX on event_type
+```
+
+### 1.5 Create Notification Log Table (Optional)
 Track sent notifications to prevent duplicates.
 
 ```sql
@@ -131,6 +165,103 @@ function getPeriodDateRange(period: Period, today: Date): DateRange {
     case 'next_hebrew_month':
       return getHebrewMonthRange(getNextHebrewMonth(today));
   }
+}
+```
+
+### 2.4 Create Event Calculation Module
+Location: `lib/calendar/event-calculations.ts`
+
+Core functions for calculating upcoming event dates.
+
+```typescript
+import { HDate, HebrewCalendar } from '@hebcal/core';
+
+interface UpcomingEvent {
+  gregorianDate: Date;
+  hebrewDate: string;
+  years: number;
+}
+
+/**
+ * Calculate the next birthday occurrence (Hebrew calendar)
+ */
+function calculateUpcomingBirthday(
+  birthDate: Date,
+  afterSunset: boolean,
+  today: Date,
+  endDate: Date
+): UpcomingEvent | null {
+  // Convert birth date to Hebrew
+  const hebrewBirthDate = new HDate(birthDate);
+  if (afterSunset) hebrewBirthDate.next();
+
+  const currentHebrewYear = new HDate(today).getFullYear();
+
+  // Check this year and next year
+  for (let yearOffset = 0; yearOffset <= 1; yearOffset++) {
+    const targetYear = currentHebrewYear + yearOffset;
+    const nextOccurrence = new HDate(
+      hebrewBirthDate.getDate(),
+      hebrewBirthDate.getMonth(),
+      targetYear
+    );
+
+    const gregorianDate = nextOccurrence.greg();
+    if (gregorianDate >= today && gregorianDate <= endDate) {
+      return {
+        gregorianDate,
+        hebrewDate: nextOccurrence.render('en'),
+        years: targetYear - hebrewBirthDate.getFullYear()
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * Calculate the next yahrzeit occurrence
+ * Uses hebcal's built-in yahrzeit calculation (handles leap year rules)
+ */
+function calculateUpcomingYahrzeit(
+  deathDate: Date,
+  afterSunset: boolean,
+  today: Date,
+  endDate: Date
+): UpcomingEvent | null {
+  const hebrewDeathDate = new HDate(deathDate);
+  if (afterSunset) hebrewDeathDate.next();
+
+  const currentHebrewYear = new HDate(today).getFullYear();
+
+  for (let yearOffset = 0; yearOffset <= 1; yearOffset++) {
+    const targetYear = currentHebrewYear + yearOffset;
+    const yahrzeit = HebrewCalendar.getYahrzeit(targetYear, hebrewDeathDate);
+
+    if (yahrzeit) {
+      const gregorianDate = yahrzeit.greg();
+      if (gregorianDate >= today && gregorianDate <= endDate) {
+        return {
+          gregorianDate,
+          hebrewDate: yahrzeit.render('en'),
+          years: targetYear - hebrewDeathDate.getFullYear()
+        };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Calculate upcoming date for custom events (anniversaries, etc.)
+ */
+function calculateUpcomingCustomEvent(
+  eventDate: Date,
+  afterSunset: boolean,
+  today: Date,
+  endDate: Date
+): UpcomingEvent | null {
+  // Same logic as birthday - find next Hebrew calendar occurrence
+  return calculateUpcomingBirthday(eventDate, afterSunset, today, endDate);
 }
 ```
 
@@ -231,32 +362,141 @@ Location: `app/api/notifications/`
 
 ## Phase 4: Cron Jobs (Supabase Edge Functions)
 
-### 4.1 Daily Event Checker
+### 4.1 Refresh Upcoming Events Job (Core Job)
+Location: `supabase/functions/refresh-upcoming-events/`
+
+**Schedule:** Daily at 2:00 AM
+
+**Purpose:** Populate/refresh the `upcoming_event` table with pre-calculated events.
+
+**Logic:**
+```typescript
+async function refreshUpcomingEvents() {
+  const today = new Date();
+  const lookAheadMonths = 3;  // Calculate 3 months ahead
+  const endDate = addMonths(today, lookAheadMonths);
+
+  // 1. Clear past events
+  await supabase
+    .from('upcoming_event')
+    .delete()
+    .lt('event_gregorian_date', today);
+
+  // 2. Fetch all people
+  const { data: people } = await supabase
+    .from('person')
+    .select('*');
+
+  const eventsToInsert = [];
+
+  for (const person of people) {
+    // 3a. Calculate upcoming birthday
+    const birthday = calculateUpcomingBirthday(
+      person.gregorian_birthday,
+      person.birthday_after_sunset,
+      today, endDate
+    );
+    if (birthday) {
+      eventsToInsert.push({
+        person_id: person.id,
+        event_type: 'birthday',
+        event_name: `${person.first_name}'s Birthday`,
+        event_gregorian_date: birthday.gregorianDate,
+        event_hebrew_date: birthday.hebrewDate,
+        original_date: person.gregorian_birthday,
+        years: birthday.years
+      });
+    }
+
+    // 3b. Calculate upcoming yahrzeit (if deceased)
+    if (person.gregorian_date_of_passing) {
+      const yahrzeit = calculateUpcomingYahrzeit(
+        person.gregorian_date_of_passing,
+        person.date_of_passing_after_sunset,
+        today, endDate
+      );
+      if (yahrzeit) {
+        eventsToInsert.push({
+          person_id: person.id,
+          event_type: 'yahrzeit',
+          event_name: `${person.first_name}'s Yahrzeit`,
+          event_gregorian_date: yahrzeit.gregorianDate,
+          event_hebrew_date: yahrzeit.hebrewDate,
+          original_date: person.gregorian_date_of_passing,
+          years: yahrzeit.years
+        });
+      }
+    }
+  }
+
+  // 4. Process custom events (anniversaries, etc.)
+  const { data: customEvents } = await supabase
+    .from('custom_event')
+    .select('*, person:person_id(first_name)');
+
+  for (const event of customEvents) {
+    const upcoming = calculateUpcomingCustomEvent(
+      event.gregorian_date,
+      event.date_after_sunset,
+      today, endDate
+    );
+    if (upcoming) {
+      eventsToInsert.push({
+        person_id: event.person_id,
+        related_person_id: event.related_person_id,
+        custom_event_id: event.id,
+        event_type: event.event_type,
+        event_name: event.event_name || `${event.person.first_name}'s ${event.event_type}`,
+        event_gregorian_date: upcoming.gregorianDate,
+        event_hebrew_date: upcoming.hebrewDate,
+        original_date: event.gregorian_date,
+        years: upcoming.years
+      });
+    }
+  }
+
+  // 5. Upsert all events
+  await supabase
+    .from('upcoming_event')
+    .upsert(eventsToInsert, {
+      onConflict: 'person_id,event_type,event_gregorian_date'
+    });
+}
+```
+
+### 4.2 Daily Event Checker (Notifications)
 Location: `supabase/functions/daily-event-check/`
 
-**Schedule:** Daily at 6:00 AM (configurable)
+**Schedule:** Daily at 6:00 AM (after refresh job)
 
 **Logic:**
 1. Get all users with `daily_reminder_enabled = true`
 2. For each user, fetch their subscriptions
-3. Calculate today's events (Hebrew and Gregorian)
+3. Query `upcoming_event` table for today's events matching subscribed people
 4. Send notification if events found
 5. Log sent notifications
 
-### 4.2 Weekly Digest Generator
+### 4.3 Weekly Digest Generator
 Location: `supabase/functions/weekly-digest/`
 
-**Schedule:** Weekly on Sunday at 8:00 AM (configurable)
+**Schedule:** Weekly on Sunday at 8:00 AM
 
 **Logic:**
 1. Get all users with `weekly_digest_enabled = true`
 2. For each user, fetch their subscriptions
-3. Calculate events for next 7 days
+3. Query `upcoming_event` table for next 7 days matching subscribed people
 4. Compile digest email/notification
 5. Send and log notifications
 
-### 4.3 Cron Configuration
+### 4.4 Cron Configuration
 Using `pg_cron` in Supabase or Supabase Edge Functions with scheduled triggers.
+
+```sql
+-- Example pg_cron setup
+SELECT cron.schedule('refresh-events', '0 2 * * *', 'SELECT refresh_upcoming_events()');
+SELECT cron.schedule('daily-check', '0 6 * * *', 'SELECT send_daily_notifications()');
+SELECT cron.schedule('weekly-digest', '0 8 * * 0', 'SELECT send_weekly_digest()');
+```
 
 ---
 
@@ -328,28 +568,32 @@ Allow subscribing to multiple people at once:
 ## Implementation Order (Recommended)
 
 ### Sprint 1: Foundation
-- [ ] Create database migrations (subscription, notification_preference, custom_event tables)
-- [ ] Install and configure @hebcal/core
+- [ ] Create database migrations (subscription, notification_preference, custom_event, upcoming_event tables)
+- [ ] Install and configure @hebcal/core and date-fns
 - [ ] Create Hebrew calendar utility module
+- [ ] Create period utility module
+- [ ] Create event calculation module
 - [ ] Create Supabase TypeScript types
 
-### Sprint 2: Core API
+### Sprint 2: Core API & Event Refresh
+- [ ] Implement refresh-upcoming-events Edge Function
 - [ ] Implement subscription CRUD endpoints
-- [ ] Implement events/upcoming endpoint
+- [ ] Implement events/all endpoint (reads from upcoming_event table)
+- [ ] Implement events/subscribed endpoint
 - [ ] Implement notification preferences endpoints
 - [ ] Add API tests
 
 ### Sprint 3: Frontend
-- [ ] Create upcoming events page
+- [ ] Create upcoming events page (with period selector)
 - [ ] Create subscriptions management page
 - [ ] Create notification settings page
 - [ ] Add subscribe buttons to person views
 
 ### Sprint 4: Notifications
-- [ ] Set up Supabase Edge Functions
-- [ ] Implement daily event checker
-- [ ] Implement weekly digest
-- [ ] Configure cron schedules
+- [ ] Set up Supabase Edge Functions cron triggers
+- [ ] Implement daily event checker (reads from upcoming_event)
+- [ ] Implement weekly digest (reads from upcoming_event)
+- [ ] Configure cron schedules (refresh at 2 AM, daily at 6 AM, weekly Sunday 8 AM)
 - [ ] Test notification delivery
 
 ### Sprint 5: Polish & Integration
@@ -424,7 +668,8 @@ kasselbook/
 ├── lib/
 │   └── calendar/
 │       ├── hebrew-calendar.ts        # Hebrew date utilities
-│       └── period-utils.ts           # Calendar period resolution (this_week, etc.)
+│       ├── period-utils.ts           # Calendar period resolution (this_week, etc.)
+│       └── event-calculations.ts     # Birthday, yahrzeit, anniversary calculations
 ├── components/
 │   ├── events/
 │   │   ├── event-card.tsx
@@ -439,10 +684,13 @@ kasselbook/
     │   ├── YYYYMMDD_add_subscription_table.sql
     │   ├── YYYYMMDD_add_custom_event_table.sql
     │   ├── YYYYMMDD_add_notification_preference_table.sql
+    │   ├── YYYYMMDD_add_upcoming_event_table.sql   # Pre-computed events cache
     │   └── YYYYMMDD_add_notification_log_table.sql
     └── functions/
-        ├── daily-event-check/
+        ├── refresh-upcoming-events/  # Daily 2 AM - populates upcoming_event table
         │   └── index.ts
-        └── weekly-digest/
+        ├── daily-event-check/        # Daily 6 AM - sends notifications
+        │   └── index.ts
+        └── weekly-digest/            # Sunday 8 AM - sends weekly summary
             └── index.ts
 ```

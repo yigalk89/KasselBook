@@ -72,6 +72,13 @@ User-level notification and display settings.
 **Supported Periods:** `this_week`, `next_week`, `this_month`, `next_month`, `this_hebrew_month`, `next_hebrew_month`, `custom`
 **Note:** Weeks start on Sunday
 
+#### Upcoming Event (Materialized Cache)
+Pre-computed table storing calculated upcoming events. Refreshed daily by cron job.
+- `person_id`, `related_person_id`, `custom_event_id` (source references)
+- `event_type`, `event_name` (event details)
+- `event_gregorian_date`, `event_hebrew_date` (calculated dates)
+- `original_date`, `years` (context for display)
+
 ## Development Guidelines
 
 ### Code Style
