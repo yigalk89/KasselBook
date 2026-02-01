@@ -1,13 +1,19 @@
 import { DeployButton } from "@/components/deploy-button";
 import { EnvVarWarning } from "@/components/env-var-warning";
 import { AuthButton } from "@/components/auth-button";
-import { Hero } from "@/components/hero";
 import { ThemeSwitcher } from "@/components/theme-switcher";
-import { ConnectSupabaseSteps } from "@/components/tutorial/connect-supabase-steps";
-import { SignUpUserSteps } from "@/components/tutorial/sign-up-user-steps";
+import { FamilyTree } from "@/components/family-tree";
 import { hasEnvVars } from "@/lib/utils";
 import Link from "next/link";
 import { Suspense } from "react";
+
+type TreeNode = {
+  name: string;
+  spouses?: string[];
+  children?: TreeNode[];
+};
+
+const ROOT_PERSON_NAME = "Harry Kassel";
 
 export default function Home() {
   return (
@@ -30,11 +36,30 @@ export default function Home() {
             )}
           </div>
         </nav>
-        <div className="flex-1 flex flex-col gap-20 max-w-5xl p-5">
-          <Hero />
-          <main className="flex-1 flex flex-col gap-6 px-4">
-            <h2 className="font-medium text-xl mb-4">Next steps</h2>
-            {hasEnvVars ? <SignUpUserSteps /> : <ConnectSupabaseSteps />}
+        <div className="flex-1 w-full flex flex-col gap-8 max-w-6xl p-6">
+          <main className="flex-1 flex flex-col gap-6">
+            <section className="rounded-2xl border border-foreground/10 bg-gradient-to-br from-emerald-50 via-amber-50 to-rose-50 p-6 md:p-8 shadow-sm">
+              <div className="flex flex-col gap-3">
+                <p className="uppercase tracking-[0.3em] text-xs text-foreground/60">
+                  Kassel Family
+                </p>
+                <h1 className="text-3xl md:text-4xl font-[600]">
+                  A living tree of connections
+                </h1>
+                <p className="text-foreground/70 max-w-2xl">
+                  Each card represents a person. Lines connect parents to their
+                  children, with spouses listed on each card.
+                </p>
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-foreground/10 bg-white/70 backdrop-blur p-4 md:p-6">
+              <div className="tree-scroll">
+                <div className="tree">
+                  <FamilyTree rootName={ROOT_PERSON_NAME} />
+                </div>
+              </div>
+            </section>
           </main>
         </div>
 
