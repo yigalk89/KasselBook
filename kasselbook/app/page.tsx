@@ -25,7 +25,7 @@ export default function Home() {
         </nav>
         <div className="flex-1 w-full flex flex-col gap-8 max-w-6xl p-6">
           <main className="flex-1 flex flex-col gap-6 items-center justify-center">
-            <section className="rounded-2xl border border-foreground/10 bg-gradient-to-br from-emerald-50 via-amber-50 to-rose-50 p-6 md:p-8 shadow-sm max-w-xl text-center">
+            <section className="rounded-2xl border border-foreground/10 bg-gradient-to-br from-emerald-50 via-amber-50 to-rose-50 dark:from-emerald-950 dark:via-amber-950 dark:to-rose-950 p-6 md:p-8 shadow-sm max-w-xl text-center">
               <div className="flex flex-col gap-4">
                 <p className="uppercase tracking-[0.3em] text-xs text-foreground/60">
                   Kassel Family
