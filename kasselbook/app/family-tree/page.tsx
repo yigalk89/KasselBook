@@ -1,11 +1,12 @@
 import { AuthButton } from "@/components/auth-button";
 import { ThemeSwitcher } from "@/components/theme-switcher";
-import { hasEnvVars } from "@/lib/utils";
-import { EnvVarWarning } from "@/components/env-var-warning";
+import { FamilyTree } from "@/components/family-tree";
 import Link from "next/link";
 import { Suspense } from "react";
 
-export default function Home() {
+const ROOT_PERSON_NAME = "Harry Kassel";
+
+export default function FamilyTreePage() {
   return (
     <main className="min-h-screen flex flex-col items-center">
       <div className="flex-1 w-full flex flex-col gap-20 items-center">
@@ -14,36 +15,32 @@ export default function Home() {
             <div className="flex gap-5 items-center font-semibold">
               <Link href={"/"}>Kassel Family Tree</Link>
             </div>
-            {!hasEnvVars ? (
-              <EnvVarWarning />
-            ) : (
-              <Suspense>
-                <AuthButton />
-              </Suspense>
-            )}
+            <Suspense>
+              <AuthButton />
+            </Suspense>
           </div>
         </nav>
         <div className="flex-1 w-full flex flex-col gap-8 max-w-6xl p-6">
-          <main className="flex-1 flex flex-col gap-6 items-center justify-center">
-            <section className="rounded-2xl border border-foreground/10 bg-gradient-to-br from-emerald-50 via-amber-50 to-rose-50 dark:from-emerald-950 dark:via-amber-950 dark:to-rose-950 p-6 md:p-8 shadow-sm max-w-xl text-center">
-              <div className="flex flex-col gap-4">
+          <main className="flex-1 flex flex-col gap-6">
+            <section className="rounded-2xl border border-foreground/10 bg-gradient-to-br from-emerald-50 via-amber-50 to-rose-50 dark:from-emerald-950 dark:via-amber-950 dark:to-rose-950 p-6 md:p-8 shadow-sm">
+              <div className="flex flex-col gap-3">
                 <p className="uppercase tracking-[0.3em] text-xs text-foreground/60">
                   Kassel Family
                 </p>
                 <h1 className="text-3xl md:text-4xl font-[600]">
                   A living tree of connections
                 </h1>
-                <p className="text-foreground/70">
-                  Explore our family history and discover the connections that
-                  bind us together across generations.
+                <p className="text-foreground/70 max-w-2xl">
+                  Each card represents a person. Lines connect parents to their
+                  children, with spouses listed on each card.
                 </p>
-                <div className="mt-4">
-                  <Link
-                    href="/auth/login"
-                    className="inline-block rounded-lg bg-foreground text-background px-6 py-3 font-medium hover:opacity-90 transition-opacity"
-                  >
-                    Sign in to view the family tree
-                  </Link>
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-foreground/10 bg-card/70 backdrop-blur p-4 md:p-6">
+              <div className="tree-scroll">
+                <div className="tree">
+                  <FamilyTree rootName={ROOT_PERSON_NAME} />
                 </div>
               </div>
             </section>

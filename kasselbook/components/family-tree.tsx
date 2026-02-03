@@ -55,8 +55,9 @@ export function FamilyTree({ rootName }: { rootName: string }) {
         );
 
         if (!response.ok) {
-          const message = await response.text();
-          throw new Error(message || "Failed to fetch family tree.");
+          const errorData = await response.json().catch(() => null);
+          const message = errorData?.error || "Failed to fetch family tree.";
+          throw new Error(message);
         }
 
         const data = (await response.json()) as { tree: TreeNode | null };

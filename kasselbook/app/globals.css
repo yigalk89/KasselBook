@@ -68,11 +68,16 @@
 }
 
 .tree {
-  --line: rgba(17, 24, 39, 0.25);
-  --card: #ffffff;
+  --line: hsl(var(--foreground) / 0.25);
+  --card-bg: hsl(var(--card));
+  --card-text: hsl(var(--card-foreground));
   --accent: #0f766e;
   font-family: "Fraunces", "Iowan Old Style", "Palatino", "Times New Roman",
     serif;
+}
+
+.dark .tree {
+  --accent: #2dd4bf;
 }
 
 .tree-scroll {
@@ -156,8 +161,8 @@
   gap: 0.35rem;
   padding: 0.75rem 1rem;
   border-radius: 1rem;
-  background: var(--card);
-  border: 1px solid rgba(15, 118, 110, 0.15);
+  background: var(--card-bg);
+  border: 1px solid hsl(var(--border));
   box-shadow: 0 10px 30px rgba(15, 118, 110, 0.08);
   min-width: 150px;
 }
@@ -165,7 +170,7 @@
 .node-name {
   font-size: 1rem;
   font-weight: 600;
-  color: #0f172a;
+  color: var(--card-text);
 }
 
 .node-meta {
@@ -173,7 +178,7 @@
   align-items: center;
   gap: 0.5rem;
   font-size: 0.85rem;
-  color: #475569;
+  color: hsl(var(--muted-foreground));
   font-family: "Source Sans 3", "Helvetica Neue", Arial, sans-serif;
 }
 
@@ -209,9 +214,9 @@
   justify-content: center;
   padding: 0.25rem 0.75rem;
   border-radius: 999px;
-  border: 1px solid rgba(15, 23, 42, 0.12);
-  background: rgba(255, 255, 255, 0.9);
-  color: #0f172a;
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--background) / 0.9);
+  color: var(--card-text);
   font-size: 0.95rem;
   font-family: "Fraunces", "Iowan Old Style", "Palatino", "Times New Roman",
     serif;

@@ -63,9 +63,10 @@ export async function GET(request: Request) {
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
   if (!supabaseUrl || !serviceRoleKey) {
-    return new NextResponse("Missing Supabase server credentials.", {
-      status: 500,
-    });
+    return NextResponse.json(
+      { error: "Missing Supabase server credentials. Please check your environment variables." },
+      { status: 500 }
+    );
   }
 
   const supabase = createClient(supabaseUrl, serviceRoleKey, {
@@ -88,9 +89,10 @@ export async function GET(request: Request) {
 
   const { data: rootPerson, error: rootError } = await rootPersonQuery;
   if (rootError) {
-    return new NextResponse(`Failed to fetch root person: ${rootError.message}`, {
-      status: 500,
-    });
+    return NextResponse.json(
+      { error: `Failed to fetch root person: ${rootError.message}` },
+      { status: 500 }
+    );
   }
 
   const { data: persons, error: personsError } = await supabase
@@ -98,9 +100,10 @@ export async function GET(request: Request) {
     .select("id, first_name, last_name, gender");
 
   if (personsError) {
-    return new NextResponse(`Failed to fetch persons: ${personsError.message}`, {
-      status: 500,
-    });
+    return NextResponse.json(
+      { error: `Failed to fetch persons: ${personsError.message}` },
+      { status: 500 }
+    );
   }
 
   const { data: relations, error: relationsError } = await supabase
@@ -108,9 +111,10 @@ export async function GET(request: Request) {
     .select("from_person, to_person, relationship");
 
   if (relationsError) {
-    return new NextResponse(`Failed to fetch relations: ${relationsError.message}`, {
-      status: 500,
-    });
+    return NextResponse.json(
+      { error: `Failed to fetch relations: ${relationsError.message}` },
+      { status: 500 }
+    );
   }
 
   const peopleById = new Map<string, PersonRecord>();
