@@ -498,6 +498,161 @@ SELECT cron.schedule('daily-check', '0 6 * * *', 'SELECT send_daily_notification
 SELECT cron.schedule('weekly-digest', '0 8 * * 0', 'SELECT send_weekly_digest()');
 ```
 
+### 4.5 Email Notification Delivery
+Integration with email provider for sending notifications.
+
+**Recommended Provider:** Resend (alternatives: SendGrid, Postmark)
+
+**Setup Requirements:**
+| Task | Description |
+|------|-------------|
+| Email provider account | Sign up for Resend/SendGrid |
+| Domain verification | Add DNS records (SPF, DKIM) for sending domain |
+| Environment variables | `RESEND_API_KEY`, `FROM_EMAIL` |
+
+**Email Service Module:**
+Location: `lib/notifications/email.ts`
+
+```typescript
+import { Resend } from 'resend';
+import { DailyReminderEmail } from '@/components/emails/daily-reminder';
+import { WeeklyDigestEmail } from '@/components/emails/weekly-digest';
+
+const resend = new Resend(process.env.RESEND_API_KEY);
+
+export async function sendDailyReminder(user: { email: string }, events: Event[]) {
+  await resend.emails.send({
+    from: 'KasselBook <notifications@kasselbook.com>',
+    to: user.email,
+    subject: `${events.length} event(s) today`,
+    react: DailyReminderEmail({ events })
+  });
+}
+
+export async function sendWeeklyDigest(user: { email: string }, events: Event[]) {
+  await resend.emails.send({
+    from: 'KasselBook <notifications@kasselbook.com>',
+    to: user.email,
+    subject: `Your week ahead: ${events.length} upcoming events`,
+    react: WeeklyDigestEmail({ events })
+  });
+}
+```
+
+**Email Templates (React Email):**
+Location: `components/emails/`
+
+```tsx
+// components/emails/daily-reminder.tsx
+import { Html, Head, Body, Container, Heading, Text, Link } from '@react-email/components';
+
+interface DailyReminderEmailProps {
+  events: Array<{
+    event_name: string;
+    event_type: string;
+    event_hebrew_date: string;
+    years: number;
+    person_id: string;
+  }>;
+}
+
+export function DailyReminderEmail({ events }: DailyReminderEmailProps) {
+  return (
+    <Html>
+      <Head />
+      <Body style={{ fontFamily: 'sans-serif' }}>
+        <Container>
+          <Heading>Today's Events</Heading>
+          {events.map((event, i) => (
+            <div key={i} style={{ marginBottom: '16px', padding: '12px', background: '#f5f5f5' }}>
+              <Text style={{ margin: 0, fontWeight: 'bold' }}>
+                {event.event_name}
+              </Text>
+              <Text style={{ margin: '4px 0', color: '#666' }}>
+                {event.event_hebrew_date} • {event.years} years
+              </Text>
+            </div>
+          ))}
+          <Link href="https://kasselbook.com/protected/events">
+            View all events →
+          </Link>
+        </Container>
+      </Body>
+    </Html>
+  );
+}
+```
+
+**Updated Daily Event Checker with Email:**
+
+```typescript
+// supabase/functions/daily-event-check/index.ts
+
+import { sendDailyReminder } from '@/lib/notifications/email';
+
+async function sendDailyNotifications() {
+  // 1. Get users with daily reminders enabled
+  const { data: users } = await supabase
+    .from('notification_preference')
+    .select('user_id, user:user_id(email)')
+    .eq('daily_reminder_enabled', true)
+    .eq('email_notifications', true);
+
+  for (const userPref of users) {
+    // 2. Get their subscriptions
+    const { data: subscriptions } = await supabase
+      .from('subscription')
+      .select('subscribed_to_person_id')
+      .eq('subscriber_user_id', userPref.user_id);
+
+    const personIds = subscriptions.map(s => s.subscribed_to_person_id);
+    if (personIds.length === 0) continue;
+
+    // 3. Get today's events for subscribed people
+    const today = new Date().toISOString().split('T')[0];
+    const { data: events } = await supabase
+      .from('upcoming_event')
+      .select('*, person:person_id(first_name, last_name)')
+      .in('person_id', personIds)
+      .eq('event_gregorian_date', today);
+
+    if (events && events.length > 0) {
+      // 4. Send email
+      await sendDailyReminder(userPref.user, events);
+
+      // 5. Log sent notifications
+      await supabase.from('notification_log').insert(
+        events.map(e => ({
+          user_id: userPref.user_id,
+          person_id: e.person_id,
+          event_type: e.event_type,
+          event_date: e.event_gregorian_date,
+          notification_type: 'daily_reminder'
+        }))
+      );
+    }
+  }
+}
+```
+
+### 4.6 In-App Notifications (Optional)
+Store notifications in DB for display in the app UI.
+
+```sql
+-- Table: user_notification
+- id (UUID, PK)
+- user_id (UUID, FK → auth.users.id, CASCADE DELETE)
+- title (TEXT, NOT NULL)
+- body (TEXT)
+- link (TEXT) -- e.g., "/protected/events?date=2024-01-15"
+- read (BOOLEAN, DEFAULT FALSE)
+- created_at (TIMESTAMP WITH TIME ZONE, DEFAULT NOW())
+
+-- Index on user_id and read status for fast badge counts
+```
+
+**Usage:** Create notification record alongside email send, display in UI with unread badge.
+
 ---
 
 ## Phase 5: Frontend Pages
@@ -589,17 +744,26 @@ Allow subscribing to multiple people at once:
 - [ ] Create notification settings page
 - [ ] Add subscribe buttons to person views
 
-### Sprint 4: Notifications
-- [ ] Set up Supabase Edge Functions cron triggers
-- [ ] Implement daily event checker (reads from upcoming_event)
-- [ ] Implement weekly digest (reads from upcoming_event)
-- [ ] Configure cron schedules (refresh at 2 AM, daily at 6 AM, weekly Sunday 8 AM)
-- [ ] Test notification delivery
+### Sprint 4: Email Integration
+- [ ] Set up email provider account (Resend recommended)
+- [ ] Configure domain verification (DNS records)
+- [ ] Add environment variables (RESEND_API_KEY, FROM_EMAIL)
+- [ ] Create email service module (`lib/notifications/email.ts`)
+- [ ] Create daily reminder email template (React Email)
+- [ ] Create weekly digest email template (React Email)
 
-### Sprint 5: Polish & Integration
+### Sprint 5: Cron Jobs & Notifications
+- [ ] Set up Supabase Edge Functions cron triggers
+- [ ] Implement daily event checker with email sending
+- [ ] Implement weekly digest with email sending
+- [ ] Configure cron schedules (refresh at 2 AM, daily at 6 AM, weekly Sunday 8 AM)
+- [ ] Add notification logging
+- [ ] Test notification delivery end-to-end
+
+### Sprint 6: Polish & Integration
 - [ ] Family tree integration
 - [ ] Bulk subscribe feature
-- [ ] Email templates
+- [ ] In-app notifications (optional)
 - [ ] Error handling and edge cases
 - [ ] Performance optimization
 
@@ -629,8 +793,16 @@ Allow subscribing to multiple people at once:
 ```json
 {
   "@hebcal/core": "^5.x.x",
-  "date-fns": "^3.x.x"
+  "date-fns": "^3.x.x",
+  "resend": "^3.x.x",
+  "@react-email/components": "^0.x.x"
 }
+```
+
+**Environment Variables to Add:**
+```
+RESEND_API_KEY=re_xxxxx
+FROM_EMAIL=notifications@kasselbook.com
 ```
 
 ---
@@ -666,11 +838,16 @@ kasselbook/
 │           └── notifications/
 │               └── page.tsx          # Notification settings
 ├── lib/
-│   └── calendar/
-│       ├── hebrew-calendar.ts        # Hebrew date utilities
-│       ├── period-utils.ts           # Calendar period resolution (this_week, etc.)
-│       └── event-calculations.ts     # Birthday, yahrzeit, anniversary calculations
+│   ├── calendar/
+│   │   ├── hebrew-calendar.ts        # Hebrew date utilities
+│   │   ├── period-utils.ts           # Calendar period resolution (this_week, etc.)
+│   │   └── event-calculations.ts     # Birthday, yahrzeit, anniversary calculations
+│   └── notifications/
+│       └── email.ts                  # Email sending wrapper (Resend integration)
 ├── components/
+│   ├── emails/                       # React Email templates
+│   │   ├── daily-reminder.tsx        # Daily notification email
+│   │   └── weekly-digest.tsx         # Weekly digest email
 │   ├── events/
 │   │   ├── event-card.tsx
 │   │   ├── event-list.tsx
