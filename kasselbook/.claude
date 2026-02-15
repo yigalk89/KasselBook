@@ -1,0 +1,167 @@
+# KasselBook - Family Tree & Event Notification System
+
+## Project Overview
+KasselBook is a genealogy/family tree application built with Next.js 16, React 19, and Supabase. It tracks family members and their relationships, with support for Hebrew calendar dates for Jewish lifecycle events.
+
+## Tech Stack
+- **Framework:** Next.js 16 (App Router)
+- **UI:** React 19, Tailwind CSS, shadcn/ui components
+- **Database:** Supabase (PostgreSQL)
+- **Authentication:** Supabase Auth with SSR
+- **Language:** TypeScript (strict mode)
+
+## Project Structure
+```
+kasselbook/
+├── app/                    # Next.js App Router pages and API routes
+│   ├── api/               # API route handlers
+│   ├── auth/              # Authentication pages
+│   └── protected/         # Auth-required pages
+├── components/            # React components
+│   └── ui/               # shadcn/ui base components
+├── lib/                   # Utilities and helpers
+│   └── supabase/         # Supabase client setup
+└── supabase/
+    ├── migrations/        # Database migrations
+    └── functions/         # Edge Functions (cron jobs)
+```
+
+## Database Schema
+
+### Existing Tables
+
+#### Person
+Stores family members with Hebrew calendar support.
+- `id` (UUID, PK)
+- `gender` ('male' | 'female')
+- `first_name`, `middle_names`, `maiden_name`, `last_name`
+- `gregorian_birthday` (DATE)
+- `birthday_after_sunset` (BOOLEAN) - for Hebrew date calculation
+- `gregorian_date_of_passing` (DATE)
+- `date_of_passing_after_sunset` (BOOLEAN)
+- `notes`, `created_at`, `last_edited_time`
+
+#### Relation
+Tracks relationships between people with automatic reverse relationship creation.
+- `id` (UUID, PK)
+- `from_person`, `to_person` (FK → person.id)
+- `relationship` ('parent', 'child', 'spouse', 'sibling', etc.)
+
+### Tables to Create (Notification System)
+
+#### Subscription
+Track which people a user wants notifications for.
+- `subscriber_user_id` (FK → auth.users) - the user receiving notifications
+- `subscribed_to_person_id` (FK → person) - the person whose events trigger notifications
+- `notify_birthday`, `notify_yahrzeit`, `notify_anniversary` (BOOLEAN)
+
+#### Custom Event
+Store custom recurring events like anniversaries.
+- `person_id` (FK → person) - primary person associated with event
+- `related_person_id` (FK → person, nullable) - optional second person (e.g., spouse)
+- `event_type` ('anniversary', 'bar_mitzvah', 'aliyah', 'other')
+- `gregorian_date`, `date_after_sunset` (for Hebrew date calc)
+
+#### Notification Preference
+User-level notification and display settings.
+- `user_id` (FK → auth.users, UNIQUE)
+- `weekly_digest_enabled`, `daily_reminder_enabled` (BOOLEAN)
+- `advance_notice_days` (INTEGER)
+- `default_events_period` (TEXT) - default: 'this_week'
+
+**Supported Periods:** `this_week`, `next_week`, `this_month`, `next_month`, `this_hebrew_month`, `next_hebrew_month`, `custom`
+**Note:** Weeks start on Sunday
+
+#### Upcoming Event (Materialized Cache)
+Pre-computed table storing calculated upcoming events. Refreshed daily by cron job.
+- `person_id`, `related_person_id`, `custom_event_id` (source references)
+- `event_type`, `event_name` (event details)
+- `event_gregorian_date`, `event_hebrew_date` (calculated dates)
+- `original_date`, `years` (context for display)
+
+## Development Guidelines
+
+### Code Style
+- Use TypeScript for all new code
+- Follow existing patterns in the codebase
+- Use shadcn/ui components for UI consistency
+- Server components by default, 'use client' only when needed
+
+### Database Conventions
+- Use UUID for all primary keys
+- Include `created_at` and `last_edited_time` on all tables
+- Create appropriate indexes for query performance
+- Use RLS (Row Level Security) policies for authorization
+
+### API Routes
+- Location: `app/api/[resource]/route.ts`
+- Use Supabase server client from `lib/supabase/server.ts`
+- Always verify authentication before data access
+- Return proper HTTP status codes and JSON responses
+
+### Hebrew Calendar
+- Use `@hebcal/core` library for Hebrew date calculations
+- Account for `*_after_sunset` flags when converting dates
+- Yahrzeit calculations follow halachic rules
+
+## Current Task: Notification System
+
+See `TODO-notification-system.md` for detailed implementation plan.
+
+### Key Features to Implement
+1. **Subscription System** - Users subscribe to people for notifications
+2. **Event Calculation** - Calculate upcoming birthdays, yahrzeits, and anniversaries (Hebrew + Gregorian)
+3. **Cron Jobs** - Daily and weekly notification jobs via Supabase Edge Functions
+4. **Events Pages** - Global view (all events) + personalized view (subscribed people only)
+5. **Subscription Management** - UI to manage subscriptions
+
+### Implementation Priority
+1. Database migrations (subscription, custom_event, notification_preference tables)
+2. Hebrew calendar utility module
+3. API endpoints for subscriptions and events (both global and subscribed views)
+4. Frontend pages (all events, my events, subscriptions, settings)
+5. Cron jobs for notifications
+
+## Commands
+
+```bash
+# Development
+npm run dev
+
+# Build
+npm run build
+
+# Supabase local development
+npx supabase start
+npx supabase db reset  # Apply migrations
+
+# Create new migration
+npx supabase migration new <migration_name>
+
+# Deploy Edge Function
+npx supabase functions deploy <function_name>
+```
+
+## Environment Variables
+Required in `.env.local`:
+```
+NEXT_PUBLIC_SUPABASE_URL=<your-supabase-url>
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<your-anon-key>
+```
+
+## Git Workflow
+- Default branch: `master`
+- Feature branches: `claude/<feature-name>-<session-id>`
+- Write clear commit messages describing changes
+- Push to remote with: `git push -u origin <branch-name>`
+
+## Testing
+- Test Hebrew date calculations with various edge cases
+- Test subscription endpoints with different user scenarios
+- Verify RLS policies prevent unauthorized access
+- Test cron jobs in development before deploying
+
+## Notes
+- The relation table automatically creates reverse relationships via triggers
+- Hebrew dates depend on sunset times - the `*_after_sunset` flags indicate if the event occurred after sunset (which is the start of the next Hebrew day)
+- Consider timezone handling for users in different locations
