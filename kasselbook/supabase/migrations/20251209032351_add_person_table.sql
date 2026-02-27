@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS person (
   last_name TEXT NOT NULL,
   gregorian_birthday DATE NOT NULL,
   birthday_after_sunset BOOLEAN NOT NULL DEFAULT FALSE, -- Based on SO: https://stackoverflow.com/a/25897040
-  gregorian_date_of_passing DATE NOT NULL,
+  gregorian_date_of_passing DATE, -- Null for living persons
   date_of_passing_after_sunset BOOLEAN NOT NULL DEFAULT FALSE, -- Based on SO: https://stackoverflow.com/a/25897040
   last_edited_time TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
   notes TEXT,
